@@ -1,0 +1,36 @@
+# Python
+*.pyc
+*.pyo
+__pycache__/
+
+# Ambiente Virtual
+venv/
+.env/
+
+# Arquivos de compilação do Python
+build/
+dist/
+*.egg-info/
+
+# Arquivos temporários de editor
+*.swp
+*.swo
+*.vscode/
+
+# Arquivos gerados por Jupyter
+.ipynb_checkpoints/
+
+# Arquivos do PyCharm
+.idea/
+
+# Arquivos de log
+*.log
+
+# Arquivos de backup
+*~
+
+# Dependências
+*.egg
+
+# Arquivos de configuração temporários
+*.db
