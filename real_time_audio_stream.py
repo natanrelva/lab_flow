@@ -4,123 +4,111 @@ import wave
 import uuid
 import time
 from collections import deque, defaultdict
-from typing import Any, Dict, List
 
 class RealTimeAudioStream:
-    def __init__(self, rate=44100, chunk_size=44100, channels_in=1, channels_out=2, format=pyaudio.paInt16, input_device_index=None, output_device_index=None):
-        # Inicializando parâmetros de áudio
+    def __init__(self,
+                 rate=44100,
+                 chunk=44100,
+                 in_ch=1,
+                 out_ch=2,
+                 fmt=pyaudio.paInt16,
+                 in_dev=None,
+                 out_dev=None):
         self.rate = rate
-        self.chunk_size = chunk_size  # 1 segundo de áudio para transcrição
-        self.channels_in = channels_in  # Mono para microfone
-        self.channels_out = channels_out  # Estéreo para BlackHole/Multi-Output
-        self.format = format
+        self.chunk_size = chunk
+        self.channels_in = in_ch
+        self.channels_out = out_ch
+        self.format = fmt
         self.p = pyaudio.PyAudio()
         self.handlers = []
-        self.pipe = defaultdict(list)  # Pipe compartilhado: {chunk_id: [(tag, data), ...]}
-        self.required_handlers = 0
-        self.buffer = deque(maxlen=10)  # Buffer para chunks capturados
+        self.pipe = defaultdict(list)
+        self.buffer = deque(maxlen=20)
 
-        # Abrindo fluxo de captura de áudio com callback
+        print(f"[RTAS] Config: rate={rate}, chunk={chunk}, in_ch={in_ch}, in_dev={in_dev}, out_ch={out_ch}, out_dev={out_dev}")
+
+        # input stream
         self.input_stream = self.p.open(
             format=self.format,
             channels=self.channels_in,
             rate=self.rate,
             input=True,
             frames_per_buffer=self.chunk_size,
-            input_device_index=input_device_index,
-            stream_callback=self.input_callback
+            input_device_index=in_dev,
+            stream_callback=self._callback
         )
 
-        # Abrindo fluxo de reprodução de áudio
+        # output stream
         self.output_stream = self.p.open(
             format=self.format,
             channels=self.channels_out,
             rate=self.rate,
             output=True,
             frames_per_buffer=self.chunk_size,
-            output_device_index=output_device_index
+            output_device_index=out_dev
         )
 
         print("Streams de áudio inicializados com sucesso.")
-        
+
     def add_handler(self, handler):
-        """Adiciona um handler ao pipeline."""
         self.handlers.append(handler)
-        self.required_handlers = len(self.handlers)
 
-    def remove_handler(self, handler):
-        """Remove um handler do pipeline."""
-        if handler in self.handlers:
-            self.handlers.remove(handler)
-        self.required_handlers = len(self.handlers)
-
-    def input_callback(self, in_data, frame_count, time_info, status):
-        """Callback para capturar áudio do microfone."""
+    def _callback(self, in_data, frame_count, time_info, status):
         audio_data = np.frombuffer(in_data, dtype=np.int16)
-        if self.channels_in == 2:  # Alterado de self.input_channels para self.channels_in
+        print(f"[Callback] Capturou {len(audio_data)} amostras")
+        if self.channels_in == 2:
             audio_data = audio_data.reshape(-1, 2)
         self.buffer.append(audio_data)
         return (None, pyaudio.paContinue)
 
     def process_chunk(self, audio_data: np.ndarray) -> np.ndarray:
-        """Processa um chunk de áudio através dos handlers."""
         chunk_id = str(uuid.uuid4())
         self.pipe[chunk_id].append(("input", audio_data))
 
         for handler in self.handlers:
             result = handler.process(chunk_id, self.pipe)
-            if result is not None:
-                tag, processed_data = result
-                self.pipe[chunk_id].append((tag, processed_data))
+            if result:
+                tag, processed = result
+                self.pipe[chunk_id].append((tag, processed))
+                print(f"[{handler.__class__.__name__}] chunk {chunk_id} → {tag['action']}")
 
-        print(f"Pipe para chunk {chunk_id}: {[(tag['action'] if isinstance(tag, dict) else tag, type(data).__name__) for tag, data in self.pipe[chunk_id]]}")
-        if len(self.pipe[chunk_id]) >= self.required_handlers + 1:
-            final_data = self.pipe[chunk_id][-1][1]
-            del self.pipe[chunk_id]
-            return final_data
-        return np.zeros(self.chunk_size * self.channels_out, dtype=np.int16)  # Alterado de self.output_channels para self.channels_out
+        # return last encode or silence
+        for tag, data in reversed(self.pipe[chunk_id]):
+            if isinstance(tag, dict) and tag.get("action") == "encode":
+                del self.pipe[chunk_id]
+                return data
 
+        del self.pipe[chunk_id]
+        return np.zeros(self.chunk_size * self.channels_out, dtype=np.int16)
 
-    def start_streaming(self):
-        """Inicia o streaming contínuo de áudio."""
+    def start(self):
         print("Iniciando streaming de áudio...")
         self.input_stream.start_stream()
 
         try:
             while True:
-                if len(self.buffer) > 0:
+                if self.buffer:
                     audio_data = self.buffer.popleft()
-                    # Converte mono para formato compatível se necessário
-                    if self.channels_in == 1:  # Alterado de self.input_channels para self.channels_in
+                    if self.channels_in == 1:
                         audio_data = audio_data.flatten()
-
-                    processed_data = self.process_chunk(audio_data)
-                    
-                    # Converte para estéreo para saída
-                    if self.channels_out == 2:  # Alterado de self.output_channels para self.channels_out
-                        processed_data = np.column_stack((processed_data, processed_data)).flatten()
-                    processed_bytes = processed_data.tobytes()
-                    self.output_stream.write(processed_bytes)
-                time.sleep(0.001)
+                    processed = self.process_chunk(audio_data)
+                    self.output_stream.write(processed.tobytes())
+                time.sleep(0.005)
         except KeyboardInterrupt:
             print("Streaming interrompido.")
-            self.stop_streaming()
+        finally:
+            self.stop()
 
-
-    def stop_streaming(self):
-        """Finaliza os fluxos de áudio."""
-        if self.input_stream:
-            self.input_stream.stop_stream()
-            self.input_stream.close()
-        if self.output_stream:
-            self.output_stream.stop_stream()
-            self.output_stream.close()
+    def stop(self):
+        self.input_stream.stop_stream()
+        self.input_stream.close()
+        self.output_stream.stop_stream()
+        self.output_stream.close()
         self.p.terminate()
+        print("Streams finalizados.")
 
     def save_audio(self, frames, filename="output.wav"):
-        """Salva o áudio capturado em um arquivo WAV."""
         with wave.open(filename, 'wb') as wf:
-            wf.setnchannels(self.output_channels)
+            wf.setnchannels(self.channels_out)
             wf.setsampwidth(self.p.get_sample_size(self.format))
             wf.setframerate(self.rate)
             wf.writeframes(b''.join(frames))

@@ -9,7 +9,6 @@ from pydub import AudioSegment
 import scipy.io.wavfile as wavfile
 import tempfile
 
-
 class DecodeHandler:
     def __init__(self):
         self.handler_id = str(uuid.uuid4())
@@ -18,18 +17,13 @@ class DecodeHandler:
         """Converte áudio int16 para float32."""
         for tag, data in pipe[chunk_id]:
             if tag == "input" and isinstance(data, np.ndarray):
-                # Converte estéreo para mono
-                if data.ndim == 2:
-                    data = data.mean(axis=1)
-                processed_data = data.astype(np.float32) / 32767.0
-                tag = {
-                    "handler_id": self.handler_id,
-                    "action": "decode",
-                    "timestamp": time.time()
-                }
-                return tag, processed_data
+                print(f"[DecodeHandler] chunk {chunk_id} → decoded (handler_id={self.handler_id})")
+                arr = data
+                if arr.ndim == 2:
+                    arr = arr.mean(axis=1)
+                out = arr.astype(np.float32) / 32767.0
+                return {"handler_id": self.handler_id, "action": "decode", "timestamp": time.time()}, out
         return None
-
 
 class SerializeHandler:
     def __init__(self):
@@ -39,15 +33,10 @@ class SerializeHandler:
         """Serializa o áudio float32 para bytes."""
         for tag, data in pipe[chunk_id]:
             if isinstance(tag, dict) and tag.get("action") == "decode":
-                processed_data = pickle.dumps(data)
-                tag = {
-                    "handler_id": self.handler_id,
-                    "action": "serialize",
-                    "timestamp": time.time()
-                }
-                return tag, processed_data
+                print(f"[SerializeHandler] chunk {chunk_id} → serialized audio (handler_id={self.handler_id})")
+                out = pickle.dumps(data)
+                return {"handler_id": self.handler_id, "action": "serialize", "timestamp": time.time()}, out
         return None
-
 
 class TranscribeHandler:
     def __init__(self):
@@ -58,46 +47,42 @@ class TranscribeHandler:
         """Transcreve áudio serializado para texto."""
         for tag, data in pipe[chunk_id]:
             if isinstance(tag, dict) and tag.get("action") == "serialize":
-                audio_data = pickle.loads(data)
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_wav:
-                    wavfile.write(temp_wav.name, 44100, (audio_data * 32767).astype(np.int16))
-                    with sr.AudioFile(temp_wav.name) as source:
-                        audio = self.recognizer.record(source)
+                print(f"[TranscribeHandler] chunk {chunk_id} → transcribing (handler_id={self.handler_id})")
+                arr = pickle.loads(data)
+                print(f"  → audio array shape: {arr.shape}, dtype: {arr.dtype}")
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as f:
+                    print(f"  → writing temp WAV to: {f.name}")
+                    wavfile.write(f.name, 44100, (arr * 32767).astype(np.int16))
+                    with sr.AudioFile(f.name) as src:
+                        audio = self.recognizer.record(src)
                         try:
-                            text = self.recognizer.recognize_google(audio, language="en-US")
-                            tag = {
-                                "handler_id": self.handler_id,
-                                "action": "transcribe",
-                                "timestamp": time.time()
-                            }
-                            return tag, text
-                        except (sr.UnknownValueError, sr.RequestError):
-                            return None
+                            text = self.recognizer.recognize_google(audio, language="pt-BR")
+                        except Exception as e:
+                            print(f"  → recognition error: {e}")
+                            text = ""
+                if not text:
+                    print(f"  → No text recognized.")
+                print(f"[TranscribeHandler] chunk {chunk_id} → got text: '{text}'")
+                return {"handler_id": self.handler_id, "action": "transcribe", "timestamp": time.time()}, text
         return None
-
 
 class TranslateHandler:
     def __init__(self):
         self.handler_id = str(uuid.uuid4())
         self.translation_dict = {
-            "hello": "olá",
-            "how are you": "como você está",
-            "good morning": "bom dia",
+            "olá": "hello",
+            "como você está": "how are you",
+            "bom dia": "good morning",
         }
 
     def process(self, chunk_id: str, pipe: dict) -> tuple:
-        """Traduz texto para português."""
+        """Traduz texto para inglês."""
         for tag, data in pipe[chunk_id]:
             if isinstance(tag, dict) and tag.get("action") == "transcribe":
-                translated_text = self.translation_dict.get(data.lower(), data)
-                tag = {
-                    "handler_id": self.handler_id,
-                    "action": "translate",
-                    "timestamp": time.time()
-                }
-                return tag, translated_text
+                print(f"[TranslateHandler] chunk {chunk_id} → translating '{data}' (handler_id={self.handler_id})")
+                out = self.translation_dict.get(data.lower(), data)
+                return {"handler_id": self.handler_id, "action": "translate", "timestamp": time.time()}, out
         return None
-
 
 class SerializeTextHandler:
     def __init__(self):
@@ -107,15 +92,10 @@ class SerializeTextHandler:
         """Serializa texto para bytes."""
         for tag, data in pipe[chunk_id]:
             if isinstance(tag, dict) and tag.get("action") == "translate":
-                processed_data = pickle.dumps(data)
-                tag = {
-                    "handler_id": self.handler_id,
-                    "action": "serialize_text",
-                    "timestamp": time.time()
-                }
-                return tag, processed_data
+                print(f"[SerializeTextHandler] chunk {chunk_id} → serialized text (handler_id={self.handler_id})")
+                out = pickle.dumps(data)
+                return {"handler_id": self.handler_id, "action": "serialize_text", "timestamp": time.time()}, out
         return None
-
 
 class EncodeHandler:
     def __init__(self):
@@ -124,32 +104,21 @@ class EncodeHandler:
         self.engine.setProperty("rate", 150)
 
     def process(self, chunk_id: str, pipe: dict) -> tuple:
-        """Converte texto serializado em áudio sintetizado (int16)."""
+        """Converte texto serializado em áudio sintetizado (int16 estéreo)."""
         for tag, data in pipe[chunk_id]:
             if isinstance(tag, dict) and tag.get("action") == "serialize_text":
                 text = pickle.loads(data)
-                if not text:
-                    processed_data = np.zeros(44100, dtype=np.int16)
+                print(f"[EncodeHandler] chunk {chunk_id} → encoding text '{text}' (handler_id={self.handler_id})")
+                with io.BytesIO() as buf:
+                    self.engine.save_to_file(text, buf)
+                    self.engine.runAndWait()
+                    buf.seek(0)
+                    seg = AudioSegment.from_file(buf, format="wav")
+                    arr = np.array(seg.get_array_of_samples(), dtype=np.int16)
+                if len(arr) < 44100:
+                    arr = np.pad(arr, (0, 44100 - len(arr)))
                 else:
-                    with io.BytesIO() as audio_io:
-                        self.engine.save_to_file(text, audio_io)
-                        self.engine.runAndWait()
-                        audio_io.seek(0)
-                        audio_segment = AudioSegment.from_file(audio_io, format="wav")
-                        audio_data = np.array(audio_segment.get_array_of_samples(), dtype=np.int16)
-                        if len(audio_data) < 44100:
-                            audio_data = np.pad(audio_data, (0, 44100 - len(audio_data)))
-                        elif len(audio_data) > 44100:
-                            audio_data = audio_data[:44100]
-                        processed_data = audio_data
-                # Converte mono para estéreo
-                processed_data = np.column_stack((processed_data, processed_data)).flatten()
-                tag = {
-                    "handler_id": self.handler_id,
-                    "action": "encode",
-                    "timestamp": time.time()
-                }
-                return tag, processed_data
+                    arr = arr[:44100]
+                out = np.column_stack((arr, arr)).flatten()
+                return {"handler_id": self.handler_id, "action": "encode", "timestamp": time.time()}, out
         return None
-
-
