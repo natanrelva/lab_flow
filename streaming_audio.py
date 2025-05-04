@@ -1,5 +1,6 @@
 import pyaudio
 import numpy as np
+import wave
 
 class RealTimeAudioStream:
     def __init__(self, rate=44100, chunk_size=1024, channels=1, format=pyaudio.paInt16):
@@ -60,8 +61,6 @@ class RealTimeAudioStream:
         """
         Salva o áudio capturado em um arquivo WAV.
         """
-        import wave
-
         with wave.open(filename, 'wb') as wf:
             wf.setnchannels(self.channels)
             wf.setsampwidth(self.p.get_sample_size(self.format))
@@ -69,15 +68,3 @@ class RealTimeAudioStream:
             wf.writeframes(b''.join(frames))
         
         print(f"Áudio salvo como {filename}.")
-
-
-# Exemplo de uso
-if __name__ == "__main__":
-    # Inicializa o módulo de streaming de áudio
-    audio_stream = RealTimeAudioStream(rate=44100, chunk_size=1024, channels=1)
-
-    # Captura e reproduz áudio por 10 segundos
-    frames = audio_stream.capture_and_play(duration=10)
-
-    # Opcional: Salva o áudio em um arquivo WAV
-    audio_stream.save_audio(frames, filename="output.wav")
