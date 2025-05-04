@@ -1,14 +1,29 @@
-from streaming_audio import RealTimeAudioStream
+import pyaudio
+from real_time_audio_stream import RealTimeAudioStream
+from handlers import DecodeHandler, SerializeHandler, TranscribeHandler, TranslateHandler, SerializeTextHandler, EncodeHandler
 
 def main():
     # Inicializa o módulo de streaming de áudio
-    audio_stream = RealTimeAudioStream(rate=44100, chunk_size=1024, channels=1)
+    audio_stream = RealTimeAudioStream(
+        rate=44100,
+        chunk_size=44100,  # 1 segundo para transcrição
+        channels_in=1,     # Mono para captura (microfone)
+        channels_out=2,    # Estéreo para BlackHole/Multi-Output
+        format=pyaudio.paInt16,
+        input_device_index=None,  # Microfone padrão
+        output_device_index=3    # Ajuste para o índice do Multi-Output Device
+    )
 
-    # Captura e reproduz áudio por 10 segundos
-    frames = audio_stream.capture_and_play(duration=10)
+    # Adiciona handlers para processamento em fluxo
+    audio_stream.add_handler(DecodeHandler())
+    audio_stream.add_handler(SerializeHandler())
+    audio_stream.add_handler(TranscribeHandler())
+    audio_stream.add_handler(TranslateHandler())
+    audio_stream.add_handler(SerializeTextHandler())
+    audio_stream.add_handler(EncodeHandler())
 
-    # Opcional: Salva o áudio em um arquivo WAV
-    audio_stream.save_audio(frames, filename="output.wav")
+    # Inicia o streaming contínuo
+    audio_stream.start_streaming()
 
 if __name__ == "__main__":
     main()
